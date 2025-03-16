@@ -625,6 +625,15 @@ class BaseModel:
         )
         noise = apply_noise_offset(noise, noise_offset)
         return noise
+    
+    def get_latent_noise_from_latents(
+        self,
+        latents: torch.Tensor,
+        noise_offset=0.0
+    ):
+        noise = torch.randn_like(latents)
+        noise = apply_noise_offset(noise, noise_offset)
+        return noise
 
     def add_noise(
             self,
@@ -1424,3 +1433,11 @@ class BaseModel:
                 encoder.to(*args, **kwargs)
         else:
             self.text_encoder.to(*args, **kwargs)
+    
+    def convert_lora_weights_before_save(self, state_dict):
+        # can be overridden in child classes to convert weights before saving
+        return state_dict
+    
+    def convert_lora_weights_before_load(self, state_dict):
+        # can be overridden in child classes to convert weights before loading
+        return state_dict

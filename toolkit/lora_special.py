@@ -20,8 +20,12 @@ sys.path.append(SD_SCRIPTS_ROOT)
 
 from networks.lora import LoRANetwork, get_block_index
 from toolkit.models.DoRA import DoRAModule
+from typing import TYPE_CHECKING
 
 from torch.utils.checkpoint import checkpoint
+
+if TYPE_CHECKING:
+    from toolkit.stable_diffusion_model import StableDiffusion
 
 RE_UPDOWN = re.compile(r"(up|down)_blocks_(\d+)_(resnets|upsamplers|downsamplers|attentions)_(\d+)_")
 
@@ -179,6 +183,7 @@ class LoRASpecialNetwork(ToolkitNetworkMixin, LoRANetwork):
             peft_format: bool = False,
             is_assistant_adapter: bool = False,
             is_transformer: bool = False,
+            base_model: 'StableDiffusion' = None,
             **kwargs
     ) -> None:
         """
@@ -204,6 +209,7 @@ class LoRASpecialNetwork(ToolkitNetworkMixin, LoRANetwork):
             ignore_if_contains = []
         self.ignore_if_contains = ignore_if_contains
         self.transformer_only = transformer_only
+        self.base_model_ref = weakref.ref(base_model)
 
         self.only_if_contains: Union[List, None] = only_if_contains
 
@@ -348,6 +354,10 @@ class LoRASpecialNetwork(ToolkitNetworkMixin, LoRANetwork):
                         # handle custom models
                         if self.transformer_only and is_unet and hasattr(root_module, 'transformer_blocks'):
                             if "transformer_blocks" not in lora_name:
+                                skip = True
+                                
+                        if self.transformer_only and is_unet and hasattr(root_module, 'blocks'):
+                            if "blocks" not in lora_name:
                                 skip = True
 
                         if (is_linear or is_conv2d) and not skip:

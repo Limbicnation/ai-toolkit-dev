@@ -310,6 +310,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 refiner_start_at=sample_config.refiner_start_at,
                 extra_values=sample_config.extra_values,
                 logger=self.logger,
+                num_frames=sample_config.num_frames,
+                fps=sample_config.fps,
                 **extra_args
             ))
 
@@ -577,6 +579,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     if self.adapter_config.train_only_image_encoder:
                         direct_save = True
                     if self.adapter_config.type == 'redux':
+                        direct_save = True
+                    if self.adapter_config.type == 'control_lora':
                         direct_save = True
                     save_ip_adapter_from_diffusers(
                         state_dict,
@@ -909,13 +913,16 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 raise ValueError("Batch must be provided for consistent noise")
             noise = self.get_consistent_noise(latents, batch, dtype=dtype)
         else:
-            # get noise
-            noise = self.sd.get_latent_noise(
-                height=latents.shape[2],
-                width=latents.shape[3],
-                batch_size=batch_size,
-                noise_offset=self.train_config.noise_offset,
-            ).to(self.device_torch, dtype=dtype)
+            if hasattr(self.sd, 'get_latent_noise_from_latents'):
+                noise = self.sd.get_latent_noise_from_latents(latents).to(self.device_torch, dtype=dtype)
+            else:
+                # get noise
+                noise = self.sd.get_latent_noise(
+                    height=latents.shape[2],
+                    width=latents.shape[3],
+                    batch_size=batch_size,
+                    noise_offset=self.train_config.noise_offset,
+                ).to(self.device_torch, dtype=dtype)
 
         if self.train_config.random_noise_shift > 0.0:
             # get random noise -1 to 1
@@ -929,9 +936,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
             noise += noise_shift
 
         # standardize the noise
-        std = noise.std(dim=(2, 3), keepdim=True)
-        normalizer = 1 / (std + 1e-6)
-        noise = noise * normalizer
+        # shouldnt be needed?
+        # std = noise.std(dim=(2, 3), keepdim=True)
+        # normalizer = 1 / (std + 1e-6)
+        # noise = noise * normalizer
 
         return noise
 
@@ -1356,6 +1364,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.adapter = CustomAdapter(
                 sd=self.sd,
                 adapter_config=self.adapter_config,
+                train_config=self.train_config,
             )
         self.adapter.to(self.device_torch, dtype=dtype)
         if latest_save_path is not None and not is_control_net:
@@ -1605,6 +1614,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     network_type=self.network_config.type,
                     transformer_only=self.network_config.transformer_only,
                     is_transformer=self.sd.is_transformer,
+                    base_model=self.sd,
                     **network_kwargs
                 )
 

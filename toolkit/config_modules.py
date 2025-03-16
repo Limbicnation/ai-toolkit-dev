@@ -57,6 +57,11 @@ class SampleConfig:
         self.refiner_start_at = kwargs.get('refiner_start_at',
                                            0.5)  # step to start using refiner on sample if it exists
         self.extra_values = kwargs.get('extra_values', [])
+        self.num_frames = kwargs.get('num_frames', 1)
+        self.fps: int = kwargs.get('fps', 16)
+        if self.num_frames > 1 and self.ext not in ['webp']:
+            print("Changing sample extention to animated webp")
+            self.ext = 'webp'
 
 
 class LormModuleSettingsConfig:
@@ -101,7 +106,7 @@ class LoRMConfig:
         })
 
 
-NetworkType = Literal['lora', 'locon', 'lorm']
+NetworkType = Literal['lora', 'locon', 'lorm', 'lokr']
 
 
 class NetworkConfig:
@@ -146,7 +151,7 @@ class NetworkConfig:
         self.lokr_factor = kwargs.get('lokr_factor', -1)
 
 
-AdapterTypes = Literal['t2i', 'ip', 'ip+', 'clip', 'ilora', 'photo_maker', 'control_net']
+AdapterTypes = Literal['t2i', 'ip', 'ip+', 'clip', 'ilora', 'photo_maker', 'control_net', 'control_lora']
 
 CLIPLayer = Literal['penultimate_hidden_states', 'image_embeds', 'last_hidden_state']
 
@@ -229,6 +234,13 @@ class AdapterConfig:
         # for llm adapter
         self.num_cloned_blocks: int = kwargs.get('num_cloned_blocks', 0)
         self.quantize_llm: bool = kwargs.get('quantize_llm', False)
+        
+        # for control lora only
+        lora_config: dict = kwargs.get('lora_config', None)
+        if lora_config is not None:
+            self.lora_config: NetworkConfig = NetworkConfig(**lora_config)
+        else:
+            self.lora_config = None
 
 
 class EmbeddingConfig:
@@ -516,6 +528,32 @@ class ModelConfig:
         self.arch: ModelArch = kwargs.get("arch", None)
         
         # handle migrating to new model arch
+        if self.arch is not None:
+            # reverse the arch to the old style
+            if self.arch == 'sd2':
+                self.is_v2 = True
+            elif self.arch == 'sd3':
+                self.is_v3 = True
+            elif self.arch == 'sdxl':
+                self.is_xl = True
+            elif self.arch == 'pixart':
+                self.is_pixart = True
+            elif self.arch == 'pixart_sigma':
+                self.is_pixart_sigma = True
+            elif self.arch == 'auraflow':
+                self.is_auraflow = True
+            elif self.arch == 'flux':
+                self.is_flux = True
+            elif self.arch == 'flex2':
+                self.is_flex2 = True
+            elif self.arch == 'lumina2':
+                self.is_lumina2 = True
+            elif self.arch == 'vega':
+                self.is_vega = True
+            elif self.arch == 'ssd':
+                self.is_ssd = True
+            else:
+                pass
         if self.arch is None:
             if kwargs.get('is_v2', False):
                 self.arch = 'sd2'
@@ -775,6 +813,8 @@ class GenerateImageConfig:
             refiner_start_at: float = 0.5,  # start at this percentage of a step. 0.0 to 1.0 . 1.0 is the end
             extra_values: List[float] = None,  # extra values to save with prompt file
             logger: Optional[EmptyLogger] = None,
+            num_frames: int = 1,
+            fps: int = 15,
     ):
         self.width: int = width
         self.height: int = height
@@ -803,6 +843,9 @@ class GenerateImageConfig:
         self.extra_kwargs = extra_kwargs if extra_kwargs is not None else {}
         self.refiner_start_at = refiner_start_at
         self.extra_values = extra_values if extra_values is not None else []
+        self.num_frames = num_frames
+        self.fps = fps
+        
 
         # prompt string will override any settings above
         self._process_prompt_string()
@@ -869,11 +912,30 @@ class GenerateImageConfig:
         # make parent dirs
         os.makedirs(self.output_folder, exist_ok=True)
         self.set_gen_time()
-        # TODO save image gen header info for A1111 and us, our seeds probably wont match
-        image.save(self.get_image_path(count, max_count))
-        # do prompt file
-        if self.add_prompt_file:
-            self.save_prompt_file(count, max_count)
+        if isinstance(image, list):
+            # video
+            if self.num_frames == 1:
+                raise ValueError(f"Expected 1 img but got a list {len(image)}")
+            if self.output_ext == 'webp':
+                # save as animated webp
+                duration = 1000 // self.fps  # Convert fps to milliseconds per frame
+                image[0].save(
+                    self.get_image_path(count, max_count),
+                    format='WEBP',
+                    append_images=image[1:],
+                    save_all=True,
+                    duration=duration,  # Duration per frame in milliseconds
+                    loop=0,  # 0 means loop forever
+                    quality=80  # Quality setting (0-100)
+                )
+            else:
+                raise ValueError(f"Unsupported video format {self.output_ext}")
+        else:
+            # TODO save image gen header info for A1111 and us, our seeds probably wont match
+            image.save(self.get_image_path(count, max_count))
+            # do prompt file
+            if self.add_prompt_file:
+                self.save_prompt_file(count, max_count)
 
     def save_prompt_file(self, count: int = 0, max_count=0):
         # save prompt file
@@ -972,6 +1034,10 @@ class GenerateImageConfig:
                     elif flag == 'extra_values':
                         # split by comma
                         self.extra_values = [float(val) for val in content.split(',')]
+                    elif flag == 'frames':
+                        self.num_frames = int(content)
+                    elif flag == 'fps':
+                        self.fps = int(content)
 
     def post_process_embeddings(
             self,
