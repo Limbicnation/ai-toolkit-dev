@@ -23,27 +23,22 @@ from toolkit.models.decorator import Decorator
 from toolkit.paths import KEYMAPS_ROOT
 from toolkit.prompt_utils import inject_trigger_into_prompt, PromptEmbeds, concat_prompt_embeds
 from toolkit.reference_adapter import ReferenceAdapter
-from toolkit.saving import save_ldm_model_from_diffusers
 from toolkit.sd_device_states_presets import empty_preset
 from toolkit.train_tools import get_torch_dtype, apply_noise_offset
 import torch
 from toolkit.pipelines import CustomStableDiffusionXLPipeline
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, T2IAdapter, DDPMScheduler, \
-    LCMScheduler, Transformer2DModel, AutoencoderTiny, ControlNetModel, \
-    FluxTransformer2DModel
-from toolkit.models.lumina2 import Lumina2Transformer2DModel
+    LCMScheduler, Transformer2DModel, AutoencoderTiny, ControlNetModel
 import diffusers
 from diffusers import \
     AutoencoderKL, \
     UNet2DConditionModel
 from diffusers import PixArtAlphaPipeline
-from transformers import T5EncoderModel, UMT5EncoderModel
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPTextModelWithProjection
 
 from toolkit.accelerator import get_accelerator, unwrap_model
 from typing import TYPE_CHECKING
 from toolkit.print import print_acc
-from transformers import Gemma2Model, Qwen2Model, LlamaModel
 
 if TYPE_CHECKING:
     from toolkit.lora_special import LoRASpecialNetwork
@@ -1181,15 +1176,10 @@ class BaseModel:
                 vae=False, unet=unet, text_encoder=False, state_dict_keys=True)
             unet_lr = unet_lr if unet_lr is not None else default_lr
             params = []
-            if self.is_pixart or self.is_auraflow or self.is_flux or self.is_v3 or self.is_lumina2:
-                for param in named_params.values():
-                    if param.requires_grad:
-                        params.append(param)
-            else:
-                for key, diffusers_key in ldm_diffusers_keymap.items():
-                    if diffusers_key in named_params and diffusers_key not in DO_NOT_TRAIN_WEIGHTS:
-                        if named_params[diffusers_key].requires_grad:
-                            params.append(named_params[diffusers_key])
+            for param in named_params.values():
+                if param.requires_grad:
+                    params.append(param)
+           
             param_data = {"params": params, "lr": unet_lr}
             trainable_parameters.append(param_data)
             print_acc(f"Found {len(params)} trainable parameter in unet")
