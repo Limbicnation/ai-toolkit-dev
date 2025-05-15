@@ -11,12 +11,13 @@ export const defaultDatasetConfig: DatasetConfig = {
   is_reg: false,
   network_weight: 1,
   resolution: [512, 768, 1024],
+  controls: []
 };
 
 export const defaultJobConfig: JobConfig = {
   job: 'extension',
   config: {
-    name: 'my_first_flex_lora_v1',
+    name: 'my_first_lora_v1',
     process: [
       {
         type: 'ui_trainer',
@@ -31,6 +32,9 @@ export const defaultJobConfig: JobConfig = {
           linear_alpha: 32,
           lokr_full_rank: true,
           lokr_factor: -1,
+          network_kwargs: {
+            ignore_if_contains: [],
+          },
         },
         save: {
           dtype: 'bf16',
@@ -43,7 +47,7 @@ export const defaultJobConfig: JobConfig = {
         train: {
           batch_size: 1,
           bypass_guidance_embedding: true,
-          steps: 2000,
+          steps: 3000,
           gradient_accumulation: 1,
           train_unet: true,
           train_text_encoder: false,
@@ -58,7 +62,7 @@ export const defaultJobConfig: JobConfig = {
           unload_text_encoder: false,
           lr: 0.0001,
           ema_config: {
-            use_ema: true,
+            use_ema: false,
             ema_decay: 0.99,
           },
           dtype: 'bf16',
@@ -70,8 +74,9 @@ export const defaultJobConfig: JobConfig = {
           name_or_path: 'ostris/Flex.1-alpha',
           quantize: true,
           quantize_te: true,
-          arch: 'flux',
+          arch: 'flex1',
           low_vram: false,
+          model_kwargs: {},
         },
         sample: {
           sampler: 'flowmatch',

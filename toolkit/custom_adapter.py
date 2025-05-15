@@ -11,6 +11,7 @@ from toolkit.data_transfer_object.data_loader import DataLoaderBatchDTO
 from toolkit.models.clip_fusion import CLIPFusionModule
 from toolkit.models.clip_pre_processor import CLIPImagePreProcessor
 from toolkit.models.control_lora_adapter import ControlLoraAdapter
+from toolkit.models.i2v_adapter import I2VAdapter
 from toolkit.models.subpixel_adapter import SubpixelAdapter
 from toolkit.models.ilora import InstantLoRAModule
 from toolkit.models.single_value_adapter import SingleValueAdapter
@@ -18,22 +19,14 @@ from toolkit.models.te_adapter import TEAdapter
 from toolkit.models.te_aug_adapter import TEAugAdapter
 from toolkit.models.vd_adapter import VisionDirectAdapter
 from toolkit.models.redux import ReduxImageEncoder
-from toolkit.paths import REPOS_ROOT
 from toolkit.photomaker import PhotoMakerIDEncoder, FuseModule, PhotoMakerCLIPEncoder
 from toolkit.saving import load_ip_adapter_model, load_custom_adapter_model
 from toolkit.train_tools import get_torch_dtype
 from toolkit.models.pixtral_vision import PixtralVisionEncoderCompatible, PixtralVisionImagePreprocessorCompatible
 import random
-
 from toolkit.util.mask import generate_random_mask
-
-sys.path.append(REPOS_ROOT)
 from typing import TYPE_CHECKING, Union, Iterator, Mapping, Any, Tuple, List, Optional, Dict
 from collections import OrderedDict
-from ipadapter.ip_adapter.attention_processor import AttnProcessor, IPAttnProcessor, IPAttnProcessor2_0, \
-    AttnProcessor2_0
-from ipadapter.ip_adapter.ip_adapter import ImageProjModel
-from ipadapter.ip_adapter.resampler import Resampler
 from toolkit.config_modules import AdapterConfig, AdapterTypes, TrainConfig
 from toolkit.prompt_utils import PromptEmbeds
 import weakref
@@ -76,6 +69,7 @@ class CustomAdapter(torch.nn.Module):
         self.is_active = True
         self.flag_word = "fla9wor0"
         self.is_unconditional_run = False
+        self.is_sampling = False
 
         self.vision_encoder: Union[PhotoMakerCLIPEncoder, CLIPVisionModelWithProjection] = None
 
@@ -105,9 +99,12 @@ class CustomAdapter(torch.nn.Module):
         self.redux_adapter: ReduxImageEncoder = None
         self.control_lora: ControlLoraAdapter = None
         self.subpixel_adapter: SubpixelAdapter = None
+        self.i2v_adapter: I2VAdapter = None
         
         self.conditional_embeds: Optional[torch.Tensor] = None
         self.unconditional_embeds: Optional[torch.Tensor] = None
+        
+        self.cached_control_image_0_1: Optional[torch.Tensor] = None
 
         self.setup_adapter()
 
@@ -255,6 +252,15 @@ class CustomAdapter(torch.nn.Module):
                 config=self.config,
                 train_config=self.train_config
             )
+        elif self.adapter_type == 'i2v':
+            self.i2v_adapter = I2VAdapter(
+                self,
+                sd=self.sd_ref(),
+                config=self.config,
+                train_config=self.train_config,
+                image_processor=self.image_processor,
+                vision_encoder=self.vision_encoder,
+            )
         elif self.adapter_type == 'subpixel':
             self.subpixel_adapter = SubpixelAdapter(
                 self,
@@ -289,6 +295,16 @@ class CustomAdapter(torch.nn.Module):
         #     return updated_prompt_embeds
         # else:
         raise NotImplementedError
+
+    def edit_batch_raw(self, batch: DataLoaderBatchDTO):
+        # happens on a raw batch before latents are created
+        return batch
+    
+    def edit_batch_processed(self, batch: DataLoaderBatchDTO):
+        # happens after the latents are processed
+        if self.adapter_type == "i2v":
+            return self.i2v_adapter.edit_batch_processed(batch)
+        return batch
 
     def setup_clip(self):
         adapter_config = self.config
@@ -512,6 +528,14 @@ class CustomAdapter(torch.nn.Module):
                     new_dict[k + '.' + k2] = v2
             self.control_lora.load_weights(new_dict, strict=strict)
         
+        if self.adapter_type == 'i2v':
+            # state dict is seperated. so recombine it
+            new_dict = {}
+            for k, v in state_dict.items():
+                for k2, v2 in v.items():
+                    new_dict[k + '.' + k2] = v2
+            self.i2v_adapter.load_weights(new_dict, strict=strict)
+        
         if self.adapter_type == 'subpixel':
             # state dict is seperated. so recombine it
             new_dict = {}
@@ -575,6 +599,11 @@ class CustomAdapter(torch.nn.Module):
             for k, v in d.items():
                 state_dict[k] = v
             return state_dict
+        elif self.adapter_type == 'i2v':
+            d = self.i2v_adapter.get_state_dict()
+            for k, v in d.items():
+                state_dict[k] = v
+            return state_dict
         elif self.adapter_type == 'subpixel':
             d = self.subpixel_adapter.get_state_dict()
             for k, v in d.items():
@@ -592,7 +621,11 @@ class CustomAdapter(torch.nn.Module):
     
     def condition_noisy_latents(self, latents: torch.Tensor, batch:DataLoaderBatchDTO):
         with torch.no_grad():
-            if self.adapter_type in ['control_lora']:
+            # todo add i2v start frame conditioning here
+            
+            if self.adapter_type in ['i2v']:
+                return self.i2v_adapter.condition_noisy_latents(latents, batch)
+            elif self.adapter_type in ['control_lora']:
                 # inpainting input is 0-1 (bs, 4, h, w) on batch.inpaint_tensor
                 # 4th channel is the mask with 1 being keep area and 0 being area to inpaint.
                 sd: StableDiffusion = self.sd_ref()
@@ -724,7 +757,7 @@ class CustomAdapter(torch.nn.Module):
             prompt: Union[List[str], str],
             is_unconditional: bool = False,
     ):
-        if self.adapter_type in ['clip_fusion', 'ilora', 'vision_direct', 'redux', 'control_lora', 'subpixel']:
+        if self.adapter_type in ['clip_fusion', 'ilora', 'vision_direct', 'redux', 'control_lora', 'subpixel', 'i2v']:
             return prompt
         elif self.adapter_type == 'text_encoder':
             # todo allow for training
@@ -1030,13 +1063,35 @@ class CustomAdapter(torch.nn.Module):
 
     def trigger_pre_te(
             self,
-            tensors_0_1: torch.Tensor,
+            tensors_0_1: Optional[torch.Tensor]=None,
+            tensors_preprocessed: Optional[torch.Tensor]=None, # preprocessed by the dataloader
             is_training=False,
             has_been_preprocessed=False,
+            batch_tensor: Optional[torch.Tensor]=None,
             quad_count=4,
             batch_size=1,
     ) -> PromptEmbeds:
-        if self.adapter_type == 'ilora' or self.adapter_type == 'vision_direct' or self.adapter_type == 'te_augmenter':
+        if tensors_0_1 is not None:
+            # actual 0 - 1 image
+            self.cached_control_image_0_1 = tensors_0_1
+        else:
+            # image has been processed through the dataloader and is prepped for vision encoder
+            self.cached_control_image_0_1 = None
+        if batch_tensor is not None and self.cached_control_image_0_1 is None:
+            # convert it to 0 - 1
+            to_cache = batch_tensor / 2 + 0.5
+            # videos come in (bs, num_frames, channels, height, width)
+            # images come in (bs, channels, height, width)
+            # if it is a video, just grad first frame
+            if len(to_cache.shape) == 5:
+                to_cache = to_cache[:, 0:1, :, :, :]
+                to_cache = to_cache.squeeze(1)
+            self.cached_control_image_0_1 = to_cache
+        
+        if tensors_preprocessed is not None and has_been_preprocessed:
+            tensors_0_1 = tensors_preprocessed
+        # if self.adapter_type == 'ilora' or self.adapter_type == 'vision_direct' or self.adapter_type == 'te_augmenter':
+        if self.adapter_type in ['ilora', 'vision_direct', 'te_augmenter', 'i2v']:
             skip_unconditional = self.sd_ref().is_flux
             if tensors_0_1 is None:
                 tensors_0_1 = self.get_empty_clip_image(batch_size)
@@ -1091,7 +1146,22 @@ class CustomAdapter(torch.nn.Module):
                     
 
                 batch_size = clip_image.shape[0]
-                if (self.adapter_type == 'vision_direct' or self.adapter_type == 'te_augmenter') and not skip_unconditional:
+                if self.config.control_image_dropout > 0 and is_training:
+                    clip_batch = torch.chunk(clip_image, batch_size, dim=0)
+                    unconditional_batch = torch.chunk(self.get_empty_clip_image(batch_size, shape=clip_image.shape).to(
+                        clip_image.device, dtype=clip_image.dtype
+                    ), batch_size, dim=0)
+                    combine_list = []
+                    for i in range(batch_size):
+                        do_dropout = random.random() < self.config.control_image_dropout
+                        if do_dropout:
+                            # dropout with noise
+                            combine_list.append(unconditional_batch[i])
+                        else:
+                            combine_list.append(clip_batch[i])
+                    clip_image = torch.cat(combine_list, dim=0)
+                
+                if self.adapter_type in ['vision_direct', 'te_augmenter', 'i2v'] and not skip_unconditional:
                     # add an unconditional so we can save it
                     unconditional = self.get_empty_clip_image(batch_size, shape=clip_image.shape).to(
                         clip_image.device, dtype=clip_image.dtype
@@ -1153,7 +1223,8 @@ class CustomAdapter(torch.nn.Module):
                         img_embeds = img_embeds.detach()
 
                     self.ilora_module(img_embeds)
-            if self.adapter_type == 'vision_direct' or self.adapter_type == 'te_augmenter':
+            # if self.adapter_type == 'vision_direct' or self.adapter_type == 'te_augmenter':
+            if self.adapter_type in ['vision_direct', 'te_augmenter', 'i2v']:
                 with torch.set_grad_enabled(is_training):
                     if is_training and self.config.train_image_encoder:
                         self.vision_encoder.train()
@@ -1161,8 +1232,9 @@ class CustomAdapter(torch.nn.Module):
                     else:
                         with torch.no_grad():
                             self.vision_encoder.eval()
+                    self.vision_encoder.to(self.device)
                     clip_output = self.vision_encoder(
-                        clip_image,
+                        clip_image.to(self.device, dtype=get_torch_dtype(self.sd_ref().dtype)),
                         output_hidden_states=True,
                     )
                     if self.config.clip_layer == 'penultimate_hidden_states':
@@ -1245,6 +1317,10 @@ class CustomAdapter(torch.nn.Module):
             yield from self.redux_adapter.parameters(recurse)
         elif self.config.type == 'control_lora':
             param_list = self.control_lora.get_params()
+            for param in param_list:
+                yield param
+        elif self.config.type == 'i2v':
+            param_list = self.i2v_adapter.get_params()
             for param in param_list:
                 yield param
         elif self.config.type == 'subpixel':

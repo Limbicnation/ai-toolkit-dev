@@ -18,6 +18,8 @@ from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection, Sigl
 
 from toolkit.basic import flush, value_map
 from toolkit.buckets import get_bucket_for_image_size, get_resolution
+from toolkit.config_modules import ControlTypes
+from toolkit.control_generator import ControlGenerator
 from toolkit.metadata import get_meta_for_safetensors
 from toolkit.models.pixtral_vision import PixtralVisionImagePreprocessorCompatible
 from toolkit.prompt_utils import inject_trigger_into_prompt
@@ -61,7 +63,7 @@ transforms_dict = {
     'RandomEqualize': transforms.RandomEqualize(p=0.2),
 }
 
-caption_ext_list = ['txt', 'json', 'caption']
+img_ext_list = ['.jpg', '.jpeg', '.png', '.webp']
 
 
 def standardize_images(images):
@@ -89,15 +91,16 @@ def standardize_images(images):
     return standardized_images
 
 def clean_caption(caption):
-    # remove any newlines
-    caption = caption.replace('\n', ', ')
-    # remove new lines for all operating systems
-    caption = caption.replace('\r', ', ')
-    caption_split = caption.split(',')
-    # remove empty strings
-    caption_split = [p.strip() for p in caption_split if p.strip()]
-    # join back together
-    caption = ', '.join(caption_split)
+    # this doesnt make any sense anymore in a world that is not based on comma seperated tokens
+    # # remove any newlines
+    # caption = caption.replace('\n', ', ')
+    # # remove new lines for all operating systems
+    # caption = caption.replace('\r', ', ')
+    # caption_split = caption.split(',')
+    # # remove empty strings
+    # caption_split = [p.strip() for p in caption_split if p.strip()]
+    # # join back together
+    # caption = ', '.join(caption_split)
     return caption
 
 
@@ -113,22 +116,17 @@ class CaptionMixin:
             # check if either has a prompt file
             path_no_ext = os.path.splitext(img_path)[0]
             prompt_path = None
-            for ext in caption_ext_list:
-                prompt_path = path_no_ext + '.' + ext
-                if os.path.exists(prompt_path):
-                    break
+            ext = self.dataset_config.caption_ext
+            prompt_path = path_no_ext + ext
         else:
             img_path = img_path_or_tuple if isinstance(img_path_or_tuple, str) else img_path_or_tuple.path
             # see if prompt file exists
             path_no_ext = os.path.splitext(img_path)[0]
-            prompt_path = None
-            for ext in caption_ext_list:
-                prompt_path = path_no_ext + '.' + ext
-                if os.path.exists(prompt_path):
-                    break
+            prompt_path = path_no_ext + ext
                 
         # allow folders to have a default prompt
         default_prompt_path = os.path.join(os.path.dirname(img_path), 'default.txt')
+        default_prompt_path_with_ext = os.path.join(os.path.dirname(img_path), 'default' + ext)
 
         if os.path.exists(prompt_path):
             with open(prompt_path, 'r', encoding='utf-8') as f:
@@ -139,6 +137,10 @@ class CaptionMixin:
                     if 'caption' in prompt:
                         prompt = prompt['caption']
 
+                prompt = clean_caption(prompt)
+        elif os.path.exists(default_prompt_path_with_ext):
+            with open(default_prompt_path, 'r', encoding='utf-8') as f:
+                prompt = f.read()
                 prompt = clean_caption(prompt)
         elif os.path.exists(default_prompt_path):
             with open(default_prompt_path, 'r', encoding='utf-8') as f:
@@ -307,6 +309,8 @@ class CaptionProcessingDTOMixin:
             self.raw_caption = caption_dict[self.path]["caption"]
             if 'caption_short' in caption_dict[self.path]:
                 self.raw_caption_short = caption_dict[self.path]["caption_short"]
+                if self.dataset_config.use_short_captions:
+                    self.raw_caption = caption_dict[self.path]["caption_short"]
         else:
             # see if prompt file exists
             path_no_ext = os.path.splitext(self.path)[0]
@@ -329,7 +333,8 @@ class CaptionProcessingDTOMixin:
                             prompt = prompt_json['caption']
                         if 'caption_short' in prompt_json:
                             short_caption = prompt_json['caption_short']
-
+                            if self.dataset_config.use_short_captions:
+                                prompt = short_caption
                         if 'extra_values' in prompt_json:
                             self.extra_values = prompt_json['extra_values']
 
@@ -755,10 +760,10 @@ class InpaintControlFileItemDTOMixin:
             inpaint_path = dataset_config.inpaint_path
             # we are using control images
             img_path = kwargs.get('path', None)
-            img_ext_list = ['.png', '.webp']
+            img_inpaint_ext_list = ['.png', '.webp']
             file_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
 
-            for ext in img_ext_list:
+            for ext in img_inpaint_ext_list:
                 p = os.path.join(inpaint_path, file_name_no_ext + ext)
                 if os.path.exists(p):
                     self.inpaint_path = p
@@ -842,7 +847,6 @@ class ControlFileItemDTOMixin:
             self.full_size_control_images = dataset_config.full_size_control_images
             # we are using control images
             img_path = kwargs.get('path', None)
-            img_ext_list = ['.jpg', '.jpeg', '.png', '.webp']
             file_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
             
             found_control_images = []
@@ -959,7 +963,6 @@ class ClipImageFileItemDTOMixin:
             clip_image_path = dataset_config.clip_image_path
             # we are using control images
             img_path = kwargs.get('path', None)
-            img_ext_list = ['.jpg', '.jpeg', '.png', '.webp']
             file_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
             for ext in img_ext_list:
                 if os.path.exists(os.path.join(clip_image_path, file_name_no_ext + ext)):
@@ -1062,7 +1065,6 @@ class ClipImageFileItemDTOMixin:
             # randomly grab an image path from the same folder
             pool_folder = os.path.dirname(self.path)
             # find all images in the folder
-            img_ext_list = ['.jpg', '.jpeg', '.png', '.webp']
             img_files = []
             for ext in img_ext_list:
                 img_files += glob.glob(os.path.join(pool_folder, f'*{ext}'))
@@ -1281,7 +1283,6 @@ class MaskFileItemDTOMixin:
             mask_path = dataset_config.mask_path if dataset_config.mask_path is not None else dataset_config.alpha_mask
             # we are using control images
             img_path = kwargs.get('path', None)
-            img_ext_list = ['.jpg', '.jpeg', '.png', '.webp']
             file_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
             for ext in img_ext_list:
                 if os.path.exists(os.path.join(mask_path, file_name_no_ext + ext)):
@@ -1385,7 +1386,6 @@ class UnconditionalFileItemDTOMixin:
         if dataset_config.unconditional_path is not None:
             # we are using control images
             img_path = kwargs.get('path', None)
-            img_ext_list = ['.jpg', '.jpeg', '.png', '.webp']
             file_name_no_ext = os.path.splitext(os.path.basename(img_path))[0]
             for ext in img_ext_list:
                 if os.path.exists(os.path.join(dataset_config.unconditional_path, file_name_no_ext + ext)):
@@ -1944,3 +1944,55 @@ class CLIPCachingMixin:
 
         # restore device state
         self.sd.restore_device_state()
+
+
+
+class ControlCachingMixin:
+    def __init__(self: 'AiToolkitDataset', **kwargs):
+        if hasattr(super(), '__init__'):
+            super().__init__(**kwargs)
+            self.control_generator: ControlGenerator = None
+    
+    def add_control_path_to_file_item(self: 'AiToolkitDataset', file_item: 'FileItemDTO', control_path: str, control_type: ControlTypes):
+        if control_type == 'inpaint':
+            file_item.inpaint_path = control_path
+            file_item.has_inpaint_image = True
+        elif control_type == 'mask':
+            file_item.mask_path = control_path
+            file_item.has_mask_image = True
+        else:
+            if file_item.control_path is None:
+                file_item.control_path = [control_path]
+            elif isinstance(file_item.control_path, str):
+                file_item.control_path = [file_item.control_path, control_path]
+            elif isinstance(file_item.control_path, list):
+                file_item.control_path.append(control_path)
+            else:
+                raise Exception(f"Error: control_path is not a string or list: {file_item.control_path}")
+            file_item.has_control_image = True
+
+    def setup_controls(self: 'AiToolkitDataset'):
+        if not self.is_generating_controls:
+            return
+        with torch.no_grad():
+            print_acc(f"Generating controls for {self.dataset_path}")
+            device = self.sd.device
+            
+            self.control_generator = ControlGenerator(
+                device=device,
+                sd=self.sd,
+            )
+
+            # use tqdm to show progress
+            for file_item in tqdm(self.file_list, desc=f'Generating Controls'):
+                for control_type in self.dataset_config.controls:
+                    # generates the control if it is not already there
+                    control_path = self.control_generator.get_control_path(file_item.path, control_type)
+                    if control_path is not None:
+                        self.add_control_path_to_file_item(file_item, control_path, control_type)
+                
+            # remove models
+            self.control_generator.cleanup()
+            self.control_generator = None
+            
+            flush()

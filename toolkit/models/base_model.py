@@ -5,7 +5,7 @@ import json
 import random
 import shutil
 import typing
-from typing import Union, List, Literal
+from typing import Optional, Union, List, Literal
 import os
 from collections import OrderedDict
 import copy
@@ -113,15 +113,15 @@ class BaseModel:
     ):
         self.accelerator = get_accelerator()
         self.custom_pipeline = custom_pipeline
-        self.device = str(self.accelerator.device)
+        self.device = device
         self.dtype = dtype
         self.torch_dtype = get_torch_dtype(dtype)
-        self.device_torch = self.accelerator.device
+        self.device_torch = torch.device(device)
 
-        self.vae_device_torch = self.accelerator.device
+        self.vae_device_torch = torch.device(device)
         self.vae_torch_dtype = get_torch_dtype(model_config.vae_dtype)
 
-        self.te_device_torch = self.accelerator.device
+        self.te_device_torch = torch.device(device)
         self.te_torch_dtype = get_torch_dtype(model_config.te_dtype)
 
         self.model_config = model_config
@@ -242,7 +242,7 @@ class BaseModel:
         
         # flux packs this again,
         if self.is_flux:
-            divisibility = divisibility * 4
+            divisibility = divisibility * 2
         return divisibility
 
     # these must be implemented in child classes
@@ -703,6 +703,7 @@ class BaseModel:
             return_conditional_pred=False,
             guidance_embedding_scale=1.0,
             bypass_guidance_embedding=False,
+            batch: Union[None, 'DataLoaderBatchDTO'] = None,
             **kwargs,
     ):
         conditional_pred = None
@@ -724,9 +725,13 @@ class BaseModel:
         do_classifier_free_guidance = True
 
         # check if batch size of embeddings matches batch size of latents
-        if latents.shape[0] == text_embeddings.text_embeds.shape[0]:
+        if isinstance(text_embeddings.text_embeds, list):
+            te_batch_size = text_embeddings.text_embeds[0].shape[0]
+        else:
+            te_batch_size = text_embeddings.text_embeds.shape[0]
+        if latents.shape[0] == te_batch_size:
             do_classifier_free_guidance = False
-        elif latents.shape[0] * 2 != text_embeddings.text_embeds.shape[0]:
+        elif latents.shape[0] * 2 != te_batch_size:
             raise ValueError(
                 "Batch size of latents must be the same or half the batch size of text embeddings")
         latents = latents.to(self.device_torch)
@@ -821,6 +826,8 @@ class BaseModel:
             kwargs['guidance_embedding_scale'] = guidance_embedding_scale
         if 'bypass_guidance_embedding' in signatures:
             kwargs['bypass_guidance_embedding'] = bypass_guidance_embedding
+        if 'batch' in signatures:
+            kwargs['batch'] = batch
 
         noise_pred = self.get_noise_prediction(
             latent_model_input=latent_model_input,
@@ -1153,12 +1160,12 @@ class BaseModel:
             if self.model_config.ignore_if_contains is not None:
                 # remove params that contain the ignore_if_contains from named params
                 for key in list(named_params.keys()):
-                    if any([s in key for s in self.model_config.ignore_if_contains]):
+                    if any([s in f"transformer.{key}" for s in self.model_config.ignore_if_contains]):
                         del named_params[key]
             if self.model_config.only_if_contains is not None:
                 # remove params that do not contain the only_if_contains from named params
                 for key in list(named_params.keys()):
-                    if not any([s in key for s in self.model_config.only_if_contains]):
+                    if not any([s in f"transformer.{key}" for s in self.model_config.only_if_contains]):
                         del named_params[key]
 
         if refiner:
@@ -1475,3 +1482,11 @@ class BaseModel:
     def condition_noisy_latents(self, latents: torch.Tensor, batch:'DataLoaderBatchDTO'):
         # can be overridden in child classes to condition latents before noise prediction
         return latents
+    
+    def get_transformer_block_names(self) -> Optional[List[str]]:
+        # override in child classes to get transformer block names for lora targeting
+        return None
+    
+    def get_base_model_version(self) -> str:
+        # override in child classes to get the base model version
+        return "unknown"

@@ -453,12 +453,14 @@ def get_guided_loss_polarity(
             noise,
             timesteps
         ).detach()
+        conditional_noisy_latents = sd.condition_noisy_latents(conditional_noisy_latents, batch)
 
         unconditional_noisy_latents = sd.add_noise(
             unconditional_latents,
             noise,
             timesteps
         ).detach()
+        unconditional_noisy_latents = sd.condition_noisy_latents(unconditional_noisy_latents, batch)
 
         # double up everything to run it through all at once
         cat_embeds = concat_prompt_embeds([conditional_embeds, conditional_embeds])
@@ -649,11 +651,13 @@ def targeted_flow_guidance(
             noise,
             timesteps
         ).detach()
+        unconditional_noisy_latents = sd.condition_noisy_latents(unconditional_noisy_latents, batch)
         conditional_noisy_latents = sd.add_noise(
             conditional_latents,
             noise,
             timesteps
         ).detach()
+        conditional_noisy_latents = sd.condition_noisy_latents(conditional_noisy_latents, batch)
         
         # disable the lora to get a baseline prediction
         sd.network.is_active = False

@@ -1,6 +1,6 @@
 'use client';
-
-import { options, modelArchs, isVideoModelFromArch } from './options';
+import { useMemo } from 'react';
+import { modelArchs, ModelArch } from './options';
 import { defaultDatasetConfig } from './jobConfig';
 import { JobConfig } from '@/types';
 import { objectCopy } from '@/utils/basic';
@@ -33,7 +33,13 @@ export default function SimpleJob({
   gpuList,
   datasetOptions,
 }: Props) {
-  const isVideoModel = isVideoModelFromArch(jobConfig.config.process[0].model.arch);
+
+  const modelArch = useMemo(() => {
+    return modelArchs.find(a => a.name === jobConfig.config.process[0].model.arch) as ModelArch;
+  }, [jobConfig.config.process[0].model.arch]);
+
+  const isVideoModel = !!modelArch?.isVideoModel;
+
   return (
     <>
       <form onSubmit={handleSubmit} className="space-y-8">
@@ -70,46 +76,6 @@ export default function SimpleJob({
           {/* Model Configuration Section */}
           <Card title="Model Configuration">
             <SelectInput
-              label="Name or Path"
-              value={jobConfig.config.process[0].model.name_or_path}
-              onChange={value => {
-                // see if model changed
-                const currentModel = options.model.find(
-                  model => model.name_or_path === jobConfig.config.process[0].model.name_or_path,
-                );
-                if (!currentModel || currentModel.name_or_path === value) {
-                  // model has not changed
-                  return;
-                }
-                // revert defaults from previous model
-                for (const key in currentModel.defaults) {
-                  setJobConfig(currentModel.defaults[key][1], key);
-                }
-                // set new model
-                setJobConfig(value, 'config.process[0].model.name_or_path');
-                // update the defaults when a model is selected
-                const model = options.model.find(model => model.name_or_path === value);
-                if (model?.defaults) {
-                  for (const key in model.defaults) {
-                    setJobConfig(model.defaults[key][0], key);
-                  }
-                }
-              }}
-              options={
-                options.model
-                  .map(model => {
-                    if (model.dev_only && !isDev) {
-                      return null;
-                    }
-                    return {
-                      value: model.name_or_path,
-                      label: model.name_or_path,
-                    };
-                  })
-                  .filter(x => x) as { value: string; label: string }[]
-              }
-            />
-            <SelectInput
               label="Model Architecture"
               value={jobConfig.config.process[0].model.arch}
               onChange={value => {
@@ -117,8 +83,30 @@ export default function SimpleJob({
                 if (!currentArch || currentArch.name === value) {
                   return;
                 }
+
+                // revert defaults from previous model
+                for (const key in currentArch.defaults) {
+                  setJobConfig(currentArch.defaults[key][1], key);
+                }
+                // update the defaults when a model is selected
+                const newArch = modelArchs.find(model => model.name === value);
+                if (newArch?.defaults) {
+                  for (const key in newArch.defaults) {
+                    setJobConfig(newArch.defaults[key][0], key);
+                  }
+                }
                 // set new model
                 setJobConfig(value, 'config.process[0].model.arch');
+
+                // update controls for datasets
+                const controls = newArch?.controls ?? [];
+                const datasets = jobConfig.config.process[0].datasets.map(dataset => {
+                  const newDataset = objectCopy(dataset);
+                  newDataset.controls = controls;
+                  return newDataset;
+                }
+                );
+                setJobConfig(datasets, 'config.process[0].datasets');
               }}
               options={
                 modelArchs
@@ -130,6 +118,18 @@ export default function SimpleJob({
                   })
                   .filter(x => x) as { value: string; label: string }[]
               }
+            />
+            <TextInput
+              label="Name or Path"
+              value={jobConfig.config.process[0].model.name_or_path}
+              onChange={(value: string | null) => {
+                if (value?.trim() === '') {
+                  value = null;
+                }
+                setJobConfig(value, 'config.process[0].model.name_or_path');
+              }}
+              placeholder=""
+              required
             />
             <FormGroup label="Quantize">
               <div className="grid grid-cols-2 gap-2">
@@ -283,7 +283,7 @@ export default function SimpleJob({
                   options={[
                     { value: 'sigmoid', label: 'Sigmoid' },
                     { value: 'linear', label: 'Linear' },
-                    { value: 'flux_shift', label: 'Flux Shift' },
+                    { value: 'shift', label: 'Shift' },
                   ]}
                 />
                 <SelectInput
@@ -461,12 +461,16 @@ export default function SimpleJob({
               ))}
               <button
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  const newDataset = objectCopy(defaultDatasetConfig);
+                  // automaticallt add the controls for a new dataset
+                  const controls = modelArch?.controls ?? [];
+                  newDataset.controls = controls;
                   setJobConfig(
-                    [...jobConfig.config.process[0].datasets, objectCopy(defaultDatasetConfig)],
+                    [...jobConfig.config.process[0].datasets, newDataset],
                     'config.process[0].datasets',
                   )
-                }
+                }}
                 className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
               >
                 Add Dataset

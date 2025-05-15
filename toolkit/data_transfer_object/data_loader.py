@@ -10,6 +10,7 @@ from PIL import Image
 from PIL.ImageOps import exif_transpose
 
 from toolkit import image_utils
+from toolkit.basic import get_quick_signature_string
 from toolkit.dataloader_mixins import CaptionProcessingDTOMixin, ImageProcessingDTOMixin, LatentCachingFileItemDTOMixin, \
     ControlFileItemDTOMixin, ArgBreakMixin, PoiFileItemDTOMixin, MaskFileItemDTOMixin, AugmentationFileItemDTOMixin, \
     UnconditionalFileItemDTOMixin, ClipImageFileItemDTOMixin, InpaintControlFileItemDTOMixin
@@ -53,8 +54,19 @@ class FileItemDTO(
             file_key = self.path.replace(dataset_root, '')
         else:
             file_key = os.path.basename(self.path)
+        
+        file_signature = get_quick_signature_string(self.path)
+        if file_signature is None:
+            raise Exception("Error: Could not get file signature for {self.path}")
+        
+        use_db_entry = False
         if file_key in size_database:
-            w, h = size_database[file_key]
+            db_entry = size_database[file_key]
+            if db_entry is not None and len(db_entry) >= 3 and db_entry[2] == file_signature:
+                use_db_entry = True
+        
+        if use_db_entry:
+            w, h, _ = size_database[file_key]
         elif self.is_video:
             # Open the video file
             video = cv2.VideoCapture(self.path)
@@ -66,10 +78,11 @@ class FileItemDTO(
             # Get width and height
             width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            w, h = width, height
             
             # Release the video capture object immediately
             video.release()
-            size_database[file_key] = (width, height)
+            size_database[file_key] = (width, height, file_signature)
         else:
             # original method is significantly faster, but some images are read sideways. Not sure why. Do slow method for now.
             # process width and height
@@ -80,7 +93,7 @@ class FileItemDTO(
             #                f'This process is faster for png, jpeg')
             img = exif_transpose(Image.open(self.path))
             w, h = img.size
-            size_database[file_key] = (w, h)
+            size_database[file_key] = (w, h, file_signature)
         self.width: int = w
         self.height: int = h
         self.dataloader_transforms = kwargs.get('dataloader_transforms', None)

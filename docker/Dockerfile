@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.6.3-base-ubuntu22.04
+FROM nvidia/cuda:12.6.3-devel-ubuntu22.04
 
 LABEL authors="jaret"
 
@@ -52,13 +52,13 @@ RUN pip install --no-cache-dir torch==2.6.0 torchvision==0.21.0 --index-url http
 ARG CACHEBUST=1234
 RUN echo "Cache bust: ${CACHEBUST}" && \
     git clone https://github.com/ostris/ai-toolkit.git && \
-    cd ai-toolkit && \
-    git submodule update --init --recursive
+    cd ai-toolkit
 
 WORKDIR /app/ai-toolkit
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install flash-attn --no-build-isolation  --no-cache-dir
 
 # Build UI
 WORKDIR /app/ai-toolkit/ui
