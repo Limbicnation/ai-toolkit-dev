@@ -1,5 +1,6 @@
 import copy
 import gc
+import inspect
 import json
 import random
 import shutil
@@ -42,6 +43,7 @@ from toolkit.print import print_acc
 
 if TYPE_CHECKING:
     from toolkit.lora_special import LoRASpecialNetwork
+    from toolkit.data_transfer_object.data_loader import DataLoaderBatchDTO
 
 # tell it to shut up
 diffusers.logging.set_verbosity(diffusers.logging.ERROR)
@@ -97,6 +99,8 @@ UNET_IN_CHANNELS = 4  # Stable Diffusion の in_channels は 4 で固定。XLも
 
 
 class BaseModel:
+    # override these in child classes
+    arch = None
 
     def __init__(
             self,
@@ -174,6 +178,14 @@ class BaseModel:
     @unet.setter
     def unet(self, value):
         self.model = value
+        
+    @property
+    def transformer(self):
+        return self.model
+    
+    @transformer.setter
+    def transformer(self, value):
+        self.model = value
 
     @property
     def unet_unwrapped(self):
@@ -216,12 +228,22 @@ class BaseModel:
         return self.arch == 'flux'
 
     @property
-    def is_flex2(self):
-        return self.arch == 'flex2'
-
-    @property
     def is_lumina2(self):
         return self.arch == 'lumina2'
+
+    def get_bucket_divisibility(self):
+        if self.vae is None:
+            return 8
+        try:
+            divisibility = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+        except:
+            # if we have a custom vae, it might not have this
+            divisibility = 8
+        
+        # flux packs this again,
+        if self.is_flux:
+            divisibility = divisibility * 4
+        return divisibility
 
     # these must be implemented in child classes
     def load_model(self):
@@ -385,8 +407,13 @@ class BaseModel:
                     extra = {}
                     validation_image = None
                     if self.adapter is not None and gen_config.adapter_image_path is not None:
-                        validation_image = Image.open(
-                            gen_config.adapter_image_path).convert("RGB")
+                        validation_image = Image.open(gen_config.adapter_image_path)
+                        if ".inpaint." not in gen_config.adapter_image_path:
+                            validation_image = validation_image.convert("RGB")
+                        else:
+                            # make sure it has an alpha
+                            if validation_image.mode != "RGBA":
+                                raise ValueError("Inpainting images must have an alpha channel")
                         if isinstance(self.adapter, T2IAdapter):
                             # not sure why this is double??
                             validation_image = validation_image.resize(
@@ -398,6 +425,10 @@ class BaseModel:
                                 (gen_config.width, gen_config.height))
                             extra['image'] = validation_image
                             extra['controlnet_conditioning_scale'] = gen_config.adapter_conditioning_scale
+                        if isinstance(self.adapter, CustomAdapter) and self.adapter.control_lora is not None:
+                            validation_image = validation_image.resize((gen_config.width, gen_config.height))
+                            extra['control_image'] = validation_image
+                            extra['control_image_idx'] = gen_config.ctrl_idx
                         if isinstance(self.adapter, IPAdapter) or isinstance(self.adapter, ClipVisionAdapter):
                             transform = transforms.Compose([
                                 transforms.ToTensor(),
@@ -781,6 +812,15 @@ class BaseModel:
             self.unet.to(self.device_torch)
         if self.unet.dtype != self.torch_dtype:
             self.unet = self.unet.to(dtype=self.torch_dtype)
+            
+        # check if get_noise prediction has guidance_embedding_scale
+        # if it does not, we dont pass it
+        signatures =  inspect.signature(self.get_noise_prediction).parameters
+        
+        if 'guidance_embedding_scale' in signatures:
+            kwargs['guidance_embedding_scale'] = guidance_embedding_scale
+        if 'bypass_guidance_embedding' in signatures:
+            kwargs['bypass_guidance_embedding'] = bypass_guidance_embedding
 
         noise_pred = self.get_noise_prediction(
             latent_model_input=latent_model_input,
@@ -1431,3 +1471,7 @@ class BaseModel:
     def convert_lora_weights_before_load(self, state_dict):
         # can be overridden in child classes to convert weights before loading
         return state_dict
+    
+    def condition_noisy_latents(self, latents: torch.Tensor, batch:'DataLoaderBatchDTO'):
+        # can be overridden in child classes to condition latents before noise prediction
+        return latents

@@ -59,7 +59,7 @@ from tqdm import tqdm
 from toolkit.config_modules import SaveConfig, LoggingConfig, SampleConfig, NetworkConfig, TrainConfig, ModelConfig, \
     GenerateImageConfig, EmbeddingConfig, DatasetConfig, preprocess_dataset_raw_config, AdapterConfig, GuidanceConfig, validate_configs, \
     DecoratorConfig
-from toolkit.logging import create_logger
+from toolkit.logging_aitk import create_logger
 from diffusers import FluxTransformer2DModel
 from toolkit.accelerator import get_accelerator
 from toolkit.print import print_acc
@@ -252,9 +252,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
 
         test_image_paths = []
         if self.adapter_config is not None and self.adapter_config.test_img_path is not None:
-            test_image_path_list = self.adapter_config.test_img_path.split(',')
-            test_image_path_list = [p.strip() for p in test_image_path_list]
-            test_image_path_list = [p for p in test_image_path_list if p != '']
+            test_image_path_list = self.adapter_config.test_img_path
             # divide up images so they are evenly distributed across prompts
             for i in range(len(sample_config.prompts)):
                 test_image_paths.append(test_image_path_list[i % len(test_image_path_list)])
@@ -580,7 +578,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         direct_save = True
                     if self.adapter_config.type == 'redux':
                         direct_save = True
-                    if self.adapter_config.type == 'control_lora':
+                    if self.adapter_config.type in ['control_lora', 'subpixel']:
                         direct_save = True
                     save_ip_adapter_from_diffusers(
                         state_dict,
@@ -920,6 +918,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 noise = self.sd.get_latent_noise(
                     height=latents.shape[2],
                     width=latents.shape[3],
+                    num_channels=latents.shape[1],
                     batch_size=batch_size,
                     noise_offset=self.train_config.noise_offset,
                 ).to(self.device_torch, dtype=dtype)

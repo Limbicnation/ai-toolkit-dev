@@ -23,6 +23,11 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
     htop \
     nvtop \
     python3-opencv \
+    openssh-client \
+    openssh-server \
+    openssl \
+    rsync \
+    unzip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -38,8 +43,7 @@ RUN curl -sL https://deb.nodesource.com/setup_23.x -o nodesource_setup.sh && \
 WORKDIR /app
 
 # Set aliases for python and pip
-RUN echo 'alias python=python3' >> /etc/bash.bashrc && \
-    echo 'alias pip=pip3' >> /etc/bash.bashrc
+RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # install pytorch before cache bust to avoid redownloading pytorch
 RUN pip install --no-cache-dir torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu126
@@ -65,4 +69,9 @@ RUN npm install && \
 # Expose port (assuming the application runs on port 3000)
 EXPOSE 8675
 
-CMD ["npm", "run", "start"]
+WORKDIR /
+
+COPY docker/start.sh /start.sh
+RUN chmod +x /start.sh
+
+CMD ["/start.sh"]

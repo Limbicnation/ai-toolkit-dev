@@ -34,6 +34,7 @@ from diffusers import EMAModel
 import math
 from toolkit.train_tools import precondition_model_outputs_flow_match
 from toolkit.models.diffusion_feature_extraction import DiffusionFeatureExtractor, load_dfe
+from toolkit.util.wavelet_loss import wavelet_loss
 
 
 def flush():
@@ -196,7 +197,10 @@ class SDTrainer(BaseSDTrainProcess):
                 flush()
         
         if self.train_config.diffusion_feature_extractor_path is not None:
-            self.dfe = load_dfe(self.train_config.diffusion_feature_extractor_path)
+            vae = None
+            if self.model_config.arch != "flux":
+                vae = self.sd.vae
+            self.dfe = load_dfe(self.train_config.diffusion_feature_extractor_path, vae=vae)
             self.dfe.to(self.device_torch)
             self.dfe.eval()
 
@@ -481,6 +485,8 @@ class SDTrainer(BaseSDTrainProcess):
 
             if self.train_config.loss_type == "mae":
                 loss = torch.nn.functional.l1_loss(pred.float(), target.float(), reduction="none")
+            elif self.train_config.loss_type == "wavelet":
+                loss = wavelet_loss(pred, batch.latents, noise)
             else:
                 loss = torch.nn.functional.mse_loss(pred.float(), target.float(), reduction="none")
 
@@ -1063,7 +1069,6 @@ class SDTrainer(BaseSDTrainProcess):
         if self.adapter and isinstance(self.adapter, CustomAdapter):
             # condition the prompt
             # todo handle more than one adapter image
-            self.adapter.num_control_images = 1
             conditioned_prompts = self.adapter.condition_prompt(conditioned_prompts)
 
         network_weight_list = batch.get_network_weight_list()
@@ -1671,11 +1676,15 @@ class SDTrainer(BaseSDTrainProcess):
                     )
 
                 else:
-                    with self.timer('predict_unet'):
-                        if unconditional_embeds is not None:
-                            unconditional_embeds = unconditional_embeds.to(self.device_torch, dtype=dtype).detach()
+                    if unconditional_embeds is not None:
+                        unconditional_embeds = unconditional_embeds.to(self.device_torch, dtype=dtype).detach()
+                    with self.timer('condition_noisy_latents'):
+                        # do it for the model
+                        noisy_latents = self.sd.condition_noisy_latents(noisy_latents, batch)
                         if self.adapter and isinstance(self.adapter, CustomAdapter):
                             noisy_latents = self.adapter.condition_noisy_latents(noisy_latents, batch)
+                    
+                    with self.timer('predict_unet'):
                         noise_pred = self.predict_noise(
                             noisy_latents=noisy_latents.to(self.device_torch, dtype=dtype),
                             timesteps=timesteps,

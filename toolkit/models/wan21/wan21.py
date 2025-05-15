@@ -300,6 +300,7 @@ class AggressiveWanUnloadPipeline(WanPipeline):
 
 
 class Wan21(BaseModel):
+    arch = 'wan21'
     def __init__(
             self,
             device,
@@ -317,6 +318,9 @@ class Wan21(BaseModel):
 
         # cache for holding noise
         self.effective_noise = None
+        
+    def get_bucket_divisibility(self):
+        return 16
 
     # static method to get the scheduler
     @staticmethod
