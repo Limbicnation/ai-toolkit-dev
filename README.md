@@ -234,6 +234,51 @@ Please do not open a bug report unless it is a bug in the code. You are welcome 
 and ask for help there. However, please refrain from PMing me directly with general question or support. Ask in the discord
 and I will answer when I can.
 
+## Advanced: Training on Limited VRAM
+
+  Training LoRA models on large base models like FLUX can be memory-intensive. The following
+   optimizations enable successful training even on GPUs with limited VRAM (12-24GB).
+
+  ### Environment Optimization
+
+  Set these variables before running any training script:
+
+  ```bash
+  # Select specific GPU (if you have multiple)
+  export CUDA_VISIBLE_DEVICES=0  # Change as needed for your system
+
+  # Optimize CUDA memory allocation to reduce fragmentation
+  export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:512
+
+  # Disable CUDA caching (may slow re-runs but reduces peak VRAM usage)
+  export PYTORCH_NO_CUDA_MEMORY_CACHING=1
+
+  # Clear GPU cache
+  python -c "import torch; torch.cuda.empty_cache()"
+
+  Then run your training with the optimized script:
+  ./run_memory_optimized.sh
+
+  Configuration Optimizations
+
+  Our memory-optimized configuration files include these key changes:
+
+  - Quantization: Enable 4-bit quantization with quantize: true and qtype: "qint4"
+  - Sequential Loading: Use device_map: "sequential" instead of balanced loading
+  - CPU Offloading: Add sequential_cpu_offload: true and offload_to_cpu: true
+  - Resolution: Reduce from 512px to 256px (or even 192px for extreme cases)
+  - LoRA Parameters: Use smaller ranks (linear: 8, conv: 4) to preserve quality while
+  reducing memory
+  - Memory Limits: Set appropriate limits with max_memory: {0: "12GB"} (adjust for your GPU)
+
+  Example configurations that implement these optimizations:
+  - config/pixelchar_refined_v2.yaml - Balanced optimization for 24GB GPUs
+  - config/pixelrealm_lora/PixelRealm_ultra_low_mem.yaml - Extreme optimization for 12-16GB
+  GPUs
+
+  The run_memory_optimized.sh script combines these configuration optimizations with the
+  environment variables for the best results.
+
 ## Gradio UI
 
 To get started training locally with a with a custom UI, once you followed the steps above and `ai-toolkit` is installed:
