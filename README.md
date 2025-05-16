@@ -278,6 +278,7 @@ and I will answer when I can.
 
   The run_memory_optimized.sh script combines these configuration optimizations with the
   environment variables for the best results.
+```
 
 ## Gradio UI
 
