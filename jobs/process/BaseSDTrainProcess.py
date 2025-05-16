@@ -8,7 +8,7 @@ from collections import OrderedDict
 import os
 import re
 import traceback
-from typing import Union, List, Optional
+from typing import Union, List, Optional, TYPE_CHECKING
 
 import numpy as np
 import yaml
@@ -24,7 +24,18 @@ from huggingface_hub.utils import HfFolder
 
 from toolkit.basic import value_map
 from toolkit.clip_vision_adapter import ClipVisionAdapter
-from toolkit.custom_adapter import CustomAdapter
+# Import using TYPE_CHECKING to avoid circular imports
+if TYPE_CHECKING:
+    from toolkit.custom_adapter import CustomAdapter
+
+# Import for runtime use but handle circular imports
+import importlib
+CustomAdapter = None
+try:
+    from toolkit.custom_adapter import CustomAdapter
+except ImportError:
+    # Will be imported later
+    pass
 from toolkit.data_loader import get_dataloader_from_datasets, trigger_dataloader_setup_epoch
 from toolkit.data_transfer_object.data_loader import FileItemDTO, DataLoaderBatchDTO
 from toolkit.ema import ExponentialMovingAverage

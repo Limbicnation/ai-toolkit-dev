@@ -5,7 +5,7 @@ import json
 import random
 import shutil
 import typing
-from typing import Optional, Union, List, Literal
+from typing import Optional, Union, List, Literal, TYPE_CHECKING
 import os
 from collections import OrderedDict
 import copy
@@ -17,7 +17,9 @@ from tqdm import tqdm
 from torchvision.transforms import Resize, transforms
 
 from toolkit.clip_vision_adapter import ClipVisionAdapter
-from toolkit.custom_adapter import CustomAdapter
+# Use TYPE_CHECKING to avoid circular imports
+if TYPE_CHECKING:
+    from toolkit.custom_adapter import CustomAdapter
 from toolkit.ip_adapter import IPAdapter
 from toolkit.config_modules import ModelConfig, GenerateImageConfig, ModelArch
 from toolkit.models.decorator import Decorator

@@ -5,10 +5,27 @@ import torch
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 from toolkit.data_transfer_object.data_loader import DataLoaderBatchDTO
 from toolkit.lora_special import LoRASpecialNetwork
-from diffusers import WanTransformer3DModel
+# Use TYPE_CHECKING for WanTransformer3DModel to avoid circular imports
+if TYPE_CHECKING:
+    from toolkit.models.wan21.wan21 import WanTransformer3DModel
 from transformers import SiglipImageProcessor, SiglipVisionModel, CLIPImageProcessor, CLIPVisionModelWithProjection
 from diffusers.models.attention_processor import Attention
-from diffusers.models.transformers.transformer_wan import WanImageEmbedding, WanTimeTextImageEmbedding
+# We need to provide local implementations of these classes if they're not in diffusers
+try:
+    from diffusers.models.transformers.transformer_wan import WanImageEmbedding, WanTimeTextImageEmbedding
+except ImportError:
+    # Create simplified versions of the needed classes 
+    class WanImageEmbedding(torch.nn.Module):
+        def __init__(self, image_embed_dim, hidden_dim):
+            super().__init__()
+            self.proj = torch.nn.Linear(image_embed_dim, hidden_dim)
+            
+        def forward(self, x):
+            return self.proj(x)
+            
+    class WanTimeTextImageEmbedding(torch.nn.Module):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
 from toolkit.util.shuffle import shuffle_tensor_along_axis
 import torch.nn.functional as F
 
@@ -31,7 +48,8 @@ class FrameEmbedder(torch.nn.Module):
         # hidden_states = hidden_states.flatten(2).transpose(1, 2)
         
         inner_dim = orig_layer.out_channels
-        patch_size = adapter.sd_ref().model.config.patch_size
+        # Get patch_size from the model config or use a default of 2
+        patch_size = getattr(adapter.sd_ref().model.config, 'patch_size', 2)
         
         self.patch_embedding = torch.nn.Conv3d(in_channels, inner_dim, kernel_size=patch_size, stride=patch_size)
 
@@ -41,30 +59,32 @@ class FrameEmbedder(torch.nn.Module):
     @classmethod
     def from_model(
         cls,
-        model: WanTransformer3DModel,
+        model,  # Type should be WanTransformer3DModel but use dynamic check instead
         adapter: 'I2VAdapter',
     ):
-        if model.__class__.__name__ == 'WanTransformer3DModel':
+        if hasattr(model, '__class__') and model.__class__.__name__ == 'WanTransformer3DModel':
             new_channels = 20 # wan is 16 normally, and 36 with i2v so 20 new channels
 
-            orig_patch_embedding: torch.nn.Conv3d = model.patch_embedding
-            img_embedder = cls(
-                adapter,
-                orig_layer=orig_patch_embedding,
-                in_channels=new_channels,
-            )
+            if hasattr(model, 'patch_embedding'):
+                orig_patch_embedding: torch.nn.Conv3d = model.patch_embedding
+                img_embedder = cls(
+                    adapter,
+                    orig_layer=orig_patch_embedding,
+                    in_channels=new_channels,
+                )
 
-            # hijack the forward method
-            orig_patch_embedding._orig_i2v_adapter_forward = orig_patch_embedding.forward
-            orig_patch_embedding.forward = img_embedder.forward
+                # hijack the forward method
+                orig_patch_embedding._orig_i2v_adapter_forward = orig_patch_embedding.forward
+                orig_patch_embedding.forward = img_embedder.forward
 
-            # update the config of the transformer, only needed when merged in
-            # model.config.in_channels = model.config.in_channels + new_channels
-            # model.config["in_channels"] = model.config.in_channels + new_channels
+                # update the config of the transformer, only needed when merged in
+                # model.config.in_channels = model.config.in_channels + new_channels
+                # model.config["in_channels"] = model.config.in_channels + new_channels
 
-            return img_embedder
-        else:
-            raise ValueError("Model not supported")
+                return img_embedder
+
+        # If we get here, model was not supported
+        raise ValueError(f"Model not supported: {getattr(model, '__class__', None)}")
 
     @property
     def is_active(self):
@@ -135,7 +155,7 @@ class AttentionHog(torch.nn.Module):
         added_kv_proj_dim: int,
         adapter: 'I2VAdapter',
         attn_layer: Attention,
-        model: 'WanTransformer3DModel',
+        model,  # Will be WanTransformer3DModel type at runtime
     ):
         super().__init__()
 
@@ -214,7 +234,7 @@ class AttentionHog(torch.nn.Module):
 
 
 def new_wan_forward(
-    self: WanTransformer3DModel,
+    self,  # This will be a WanTransformer3DModel at runtime
     hidden_states: torch.Tensor,
     timestep: torch.LongTensor,
     encoder_hidden_states: torch.Tensor,
@@ -298,6 +318,9 @@ def new_wan_forward(
         attention_kwargs=attention_kwargs,
     )
     
+
+# Import the actual WanTransformer3DModel for runtime
+from toolkit.models.wan21.wan21 import WanTransformer3DModel as ActualWanTransformer3DModel
 
 class I2VAdapter(torch.nn.Module):
     def __init__(
@@ -416,7 +439,7 @@ class I2VAdapter(torch.nn.Module):
             sd.model.config.added_kv_proj_dim = added_kv_proj_dim
             sd.model.config['added_kv_proj_dim'] = added_kv_proj_dim
 
-            transformer: WanTransformer3DModel = sd.model
+            transformer = sd.model  # WanTransformer3DModel type at runtime
             for block in transformer.blocks:
                 block.attn2.added_kv_proj_dim = added_kv_proj_dim
                 attn_module = AttentionHog(

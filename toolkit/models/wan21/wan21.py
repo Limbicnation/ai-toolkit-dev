@@ -2,11 +2,14 @@
 from functools import partial
 import torch
 import yaml
+from typing import TYPE_CHECKING
 from toolkit.accelerator import unwrap_model
 from toolkit.basic import flush
 from toolkit.config_modules import GenerateImageConfig, ModelConfig
 from toolkit.dequantize import patch_dequantization_on_save
-from toolkit.models.base_model import BaseModel
+# Use TYPE_CHECKING for BaseModel to avoid circular imports
+if TYPE_CHECKING:
+    from toolkit.models.base_model import BaseModel
 from toolkit.prompt_utils import PromptEmbeds
 from transformers import AutoTokenizer, UMT5EncoderModel
 from diffusers import AutoencoderKLWan, WanPipeline, WanTransformer3DModel
@@ -297,7 +300,10 @@ class AggressiveWanUnloadPipeline(WanPipeline):
         return WanPipelineOutput(frames=video)
 
 
-class Wan21(BaseModel):
+# Need to import BaseModel for runtime use
+from toolkit.models.base_model import BaseModel as ActualBaseModel
+
+class Wan21(ActualBaseModel):
     arch = 'wan21'
     def __init__(
             self,

@@ -1,6 +1,7 @@
 import math
 import torch
 import sys
+from typing import TYPE_CHECKING
 
 from PIL import Image
 from torch.nn import Parameter
@@ -11,7 +12,9 @@ from toolkit.data_transfer_object.data_loader import DataLoaderBatchDTO
 from toolkit.models.clip_fusion import CLIPFusionModule
 from toolkit.models.clip_pre_processor import CLIPImagePreProcessor
 from toolkit.models.control_lora_adapter import ControlLoraAdapter
-from toolkit.models.i2v_adapter import I2VAdapter
+# Import I2VAdapter conditionally to avoid circular imports
+if TYPE_CHECKING:
+    from toolkit.models.i2v_adapter import I2VAdapter
 from toolkit.models.subpixel_adapter import SubpixelAdapter
 from toolkit.models.ilora import InstantLoRAModule
 from toolkit.models.single_value_adapter import SingleValueAdapter
@@ -253,7 +256,9 @@ class CustomAdapter(torch.nn.Module):
                 train_config=self.train_config
             )
         elif self.adapter_type == 'i2v':
-            self.i2v_adapter = I2VAdapter(
+            # Import here to avoid circular imports
+            from toolkit.models.i2v_adapter import I2VAdapter as ActualI2VAdapter
+            self.i2v_adapter = ActualI2VAdapter(
                 self,
                 sd=self.sd_ref(),
                 config=self.config,
