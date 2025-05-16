@@ -28,3 +28,6 @@ nvidia-smi
 # Run with memory optimization
 echo "Running training with optimized memory configuration..."
 python run.py config/pixelchar_refined_v2.yaml
+
+# Exit with success
+exit 0
