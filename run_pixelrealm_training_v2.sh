@@ -9,7 +9,7 @@ export CUDA_LAUNCH_BLOCKING=1
 export TF_CPP_MIN_LOG_LEVEL=3  # Suppress TensorFlow messages
 
 # Check if dataset is empty and copy sample data if needed
-DATASET_DIR="./dataset/PixelRealm_LoRA-Dataset_v5_Creative_2025-05-30"
+DATASET_DIR="./dataset/PixelRealm_LoRA-Dataset_v5_2025-05-30"
 if [ ! -d "$DATASET_DIR" ] || [ -z "$(ls -A $DATASET_DIR 2>/dev/null)" ]; then
   echo "Error: Required dataset directory '$DATASET_DIR' does not exist or is empty."
   echo "Please ensure the PixelRealm_LoRA-Dataset_v5_Creative_2025-05-30 dataset is present."
@@ -34,4 +34,4 @@ pip install --upgrade optimum
 
 # Run the training with low memory settings
 echo "Starting training with memory-optimized settings..."
-python run.py config/pixelchar_refined_v7.yaml
+python run.py config/pixelchar_refined_v8.yaml

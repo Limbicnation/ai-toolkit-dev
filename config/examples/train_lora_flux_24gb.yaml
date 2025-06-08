@@ -10,7 +10,7 @@ network:
     push_to_hub: false
   
   datasets:
-    - folder_path: "/home/gero/GitHub/ai-toolkit/pixel_art_training_dataset"
+    - folder_path: "/home/gero/GitHub/ai-toolkit/dataset/PixelRealm_LoRA-Dataset_v2_2025-05-17"
       caption_ext: "txt"
       caption_dropout_rate: 0.05
       shuffle_tokens: false
